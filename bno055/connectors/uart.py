@@ -73,7 +73,8 @@ class UART(Connector):
         except serial.serialutil.SerialException:
             self.node.get_logger().info('Unable to connect to IMU at port ' + self.port)
             self.node.get_logger().info('Check to make sure your device is connected')
-            sys.exit(1)
+            # sys.exit(1)
+            raise Exception('Unable to connect to IMU at port ' + self.port)
 
     def read(self, reg_addr, length):
         """Read data from sensor via UART.

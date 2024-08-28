@@ -29,10 +29,11 @@
 
 import sys
 import threading
+from time import sleep
 
 from bno055.connectors.i2c import I2C
 from bno055.connectors.uart import UART
-from bno055.error_handling.exceptions import BusOverRunException
+from bno055.error_handling.exceptions import BusOverRunException, TransmissionException
 from bno055.params.NodeParameters import NodeParameters
 from bno055.sensor.SensorService import SensorService
 import rclpy
@@ -81,6 +82,28 @@ class Bno055Node(Node):
 
         # configure imu
         self.sensor.configure()
+    
+    def try_reconnect(self):
+        """Try to reconnect to the sensor."""
+        self.get_logger().info('Trying to reconnect to sensor...')
+        try:
+            if self.param.connection_type.value == UART.CONNECTIONTYPE_UART:
+                connector = UART(self,
+                                self.param.uart_baudrate.value,
+                                self.param.uart_port.value,
+                                self.param.uart_timeout.value)
+            elif self.param.connection_type.value == I2C.CONNECTIONTYPE_I2C:
+                connector = I2C(self,
+                                self.param.i2c_bus.value,
+                                self.param.i2c_addr.value)
+            connector.connect()
+            self.sensor = SensorService(self, connector, self.param)
+            self.sensor.configure()
+            return True
+        except Exception as e:
+            self.get_logger().error('Reconnect failed with %s:"%s"'
+                                    % (type(e).__name__, e))
+            return False
 
 
 def main(args=None):
@@ -91,7 +114,17 @@ def main(args=None):
 
         # Create & initialize ROS2 node:
         node = Bno055Node()
-        node.setup()
+        try:
+            node.setup()
+        except Exception as e:
+            node.get_logger().error('Initialization failed with %s:"%s"'
+                                        % (type(e).__name__, e))
+            while rclpy.ok():
+                if node.try_reconnect():
+                    break
+                else:
+                    sleep(0.5)
+            node.get_logger().info('Initialization retry successful')
 
         # Create lock object to prevent overlapping data queries
         lock = threading.Lock()
@@ -114,6 +147,10 @@ def main(args=None):
                 return
             except ZeroDivisionError:
                 # division by zero in get_sensor_data, return
+                return
+            except TransmissionException:
+                node.get_logger().warn('Transmission error detected - skipping query cycle')
+                node.try_reconnect()
                 return
             except Exception as e:  # noqa: B902
                 node.get_logger().warn('Receiving sensor data failed with %s:"%s"'
